@@ -1,20 +1,31 @@
-
 import React, { useState, useRef, useEffect } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Users } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Users, LogOut, User } from 'lucide-react';
 
-const VideoCall = () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const [currentUserId, setCurrentUserId] = useState(urlParams.get('userId') || '');
-  const [isUserSet, setIsUserSet] = useState(!!urlParams.get('userId'));
+const VideoCallApp = () => {
+  // Authentication state
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authToken, setAuthToken] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [showLogin, setShowLogin] = useState(true);
   
+  // Login/Register form state
+  const [loginData, setLoginData] = useState({ email: '', password: '' });
+  const [registerData, setRegisterData] = useState({
+    firstname: '',lastname:'', email: '', password: '',
+  });
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  
+  // Call state
   const [isCallActive, setIsCallActive] = useState(false);
   const [isIncomingCall, setIsIncomingCall] = useState(false);
   const [isAudioMuted, setIsAudioMuted] = useState(false);
   const [isVideoMuted, setIsVideoMuted] = useState(false);
   const [callStatus, setCallStatus] = useState('idle');
   const [targetUserId, setTargetUserId] = useState('');
+  const [incomingCallFrom, setIncomingCallFrom] = useState(null);
+  const [onlineUsers, setOnlineUsers] = useState([]);
   const [debugLogs, setDebugLogs] = useState([]);
-  const [incomingCallFrom, setIncomingCallFrom] = useState('');
   
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
@@ -34,18 +45,146 @@ const VideoCall = () => {
   const addDebugLog = (message) => {
     const timestamp = new Date().toLocaleTimeString();
     setDebugLogs(prev => [...prev.slice(-20), `${timestamp}: ${message}`]);
-    console.log(`[${currentUserId}] ${message}`);
+    console.log(`[${currentUser?.username}] ${message}`);
   };
 
+  // Check for existing token on component mount
   useEffect(() => {
-    if (isUserSet && currentUserId) {
+    const token = localStorage.getItem('authToken');
+    const userData = localStorage.getItem('userData');
+ 
+    
+    if (token && userData) {
+      validateToken(token, JSON.parse(userData));
+    }
+  }, []);
+
+  // Initialize WebSocket when authenticated
+  useEffect(() => {
+    if (isAuthenticated && authToken) {
       initializeWebSocket();
     }
     
     return () => {
       cleanup();
     };
-  }, [isUserSet, currentUserId]);
+  }, [isAuthenticated, authToken]);
+
+  const validateToken = async (token, userData) => {
+    try {
+      const response = await fetch('http://localhost:8080/api/v1/auth/validate-token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ token })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setAuthToken(token);
+        setCurrentUser(data.user_info);
+        setIsAuthenticated(true);
+        addDebugLog('Token validated successfully');
+      } else {
+        // Token invalid, clear storage
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('userData');
+      }
+    } catch (error) {
+      console.error('Token validation failed:', error);
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('userData');
+    }
+  };
+
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+    
+    try {
+      const response = await fetch('http://localhost:8080/api/v1/auth/authenticate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(loginData)
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setAuthToken(data.access_token);
+        setCurrentUser(data.user_info);
+        setIsAuthenticated(true);
+        
+        // Store in localStorage
+        localStorage.setItem('authToken', data.access_token);
+        localStorage.setItem('userData', JSON.stringify(data.user_info));
+        
+        addDebugLog('Login successful');
+      } else {
+        setAuthError(data.message || 'Login failed');
+      }
+    } catch (error) {
+      setAuthError('Login failed: ' + error.message);
+    }
+    
+    setAuthLoading(false);
+  };
+
+  const handleRegister = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+    
+    try {
+      const response = await fetch('http://localhost:8080/api/v1/auth/register', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(registerData)
+      });
+      
+      const data = await response.json();
+      
+      if (response.ok) {
+        setAuthToken(data.access_token);
+        setCurrentUser(data.user_info);
+        setIsAuthenticated(true);
+        
+        // Store in localStorage
+        localStorage.setItem('authToken', data.access_token);
+        localStorage.setItem('userData', JSON.stringify(data.user_info));
+        
+        addDebugLog('Registration successful');
+      } else {
+        setAuthError(data.message || 'Registration failed');
+      }
+    } catch (error) {
+      setAuthError('Registration failed: ' + error.message);
+    }
+    
+    setAuthLoading(false);
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    setAuthToken(null);
+    setCurrentUser(null);
+    setOnlineUsers([]);
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('userData');
+    
+    if (websocketRef.current) {
+      websocketRef.current.close();
+    }
+    
+    cleanup();
+    addDebugLog('Logged out successfully');
+  };
 
   const cleanup = () => {
     if (websocketRef.current) {
@@ -59,16 +198,8 @@ const VideoCall = () => {
     }
   };
 
-  const setUser = () => {
-    if (currentUserId.trim()) {
-      setIsUserSet(true);
-      // Update URL for easy sharing/bookmarking
-      window.history.replaceState({}, '', `?userId=${currentUserId}`);
-    }
-  };
-
   const initializeWebSocket = () => {
-    const ws = new WebSocket(`ws://localhost:8080/call-signaling?userId=${currentUserId}`);
+    const ws = new WebSocket(`ws://localhost:8080/call-signaling?token=${authToken}`);
     
     ws.onopen = () => {
       addDebugLog('✅ WebSocket connected to server');
@@ -78,18 +209,28 @@ const VideoCall = () => {
     ws.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data);
-        addDebugLog(`📨 Received: ${message.type} ${message.fromUserId ? 'from ' + message.fromUserId : ''}`);
+        addDebugLog(`📨 Received: ${message.type}`);
         
         switch (message.type) {
           case 'connection-established':
-            addDebugLog('🔗 Connection established with server');
+            addDebugLog(`🔗 Connected as ${message.username}`);
+            // Request online users list
+            ws.send(JSON.stringify({ type: 'get-online-users' }));
+            break;
+          case 'online-users':
+            setOnlineUsers(message.users || []);
+            addDebugLog(`👥 ${message.users?.length || 0} users online`);
             break;
           case 'call-offer':
-            setIncomingCallFrom(message.fromUserId);
+            setIncomingCallFrom({
+              userId: message.fromUserId,
+              username: message.fromUsername,
+              fullName: message.callerFullName
+            });
             incomingOfferRef.current = message.offer;
             setIsIncomingCall(true);
             setCallStatus('incoming');
-            addDebugLog(`📞 Incoming call from ${message.fromUserId}`);
+            addDebugLog(`📞 Incoming call from ${message.fromUsername}`);
             break;
           case 'call-answer':
             await handleCallAnswer(message);
@@ -117,33 +258,69 @@ const VideoCall = () => {
       setCallStatus('error');
     };
     
-    ws.onclose = () => {
-      addDebugLog('🔌 WebSocket disconnected');
+    ws.onclose = (event) => {
+      addDebugLog(`🔌 WebSocket disconnected: ${event.reason}`);
       setCallStatus('disconnected');
+      if (event.code === 1006) { // Abnormal closure
+        addDebugLog('🔄 Attempting to reconnect...');
+        setTimeout(() => {
+          if (isAuthenticated && authToken) {
+            initializeWebSocket();
+          }
+        }, 3000);
+      }
     };
     
     websocketRef.current = ws;
   };
 
-    const initializeMediaDevices = async () => {
+  const startCall = async (userId) => {
     try {
-      addDebugLog('🎥 Requesting camera and microphone access...');
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true
+      addDebugLog(`📞 Starting call to ${userId}`);
+      setTargetUserId(userId);
+      setCallStatus('calling');
+      
+      const stream = await initializeMediaDevices();
+      const pc = createPeerConnection();
+      
+      stream.getTracks().forEach(track => {
+        pc.addTrack(track, stream);
       });
       
-      localStreamRef.current = stream;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      
+      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
+      console.log("Calling user with ID",userId)
+        websocketRef.current.send(JSON.stringify({
+          type: 'call-offer',
+          offer: offer,
+          targetUserId: userId
+        }));
       }
       
-      addDebugLog('✅ Media devices initialized');
-      return stream;
+      peerConnectionRef.current = pc;
+      setIsCallActive(true);
+      
     } catch (error) {
-      addDebugLog(`❌ Error accessing media devices: ${error.message}`);
-      throw error;
+      addDebugLog(`❌ Error starting call: ${error.message}`);
+      setCallStatus('error');
+      setTimeout(() => setCallStatus('connected'), 3000);
     }
+  };
+
+  const initializeMediaDevices = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: true,
+      audio: true
+    });
+    
+    localStreamRef.current = stream;
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = stream;
+    }
+    
+    return stream;
   };
 
   const createPeerConnection = () => {
@@ -151,11 +328,10 @@ const VideoCall = () => {
     
     pc.onicecandidate = (event) => {
       if (event.candidate && websocketRef.current) {
-        addDebugLog('🧊 Sending ICE candidate');
         websocketRef.current.send(JSON.stringify({
           type: 'ice-candidate',
           candidate: event.candidate,
-          targetUserId: targetUserId || incomingCallFrom
+          targetUserId: targetUserId || incomingCallFrom?.userId
         }));
       }
     };
@@ -180,80 +356,32 @@ const VideoCall = () => {
     return pc;
   };
 
-  const startCall = async (userId) => {
-    try {
-      if (!userId.trim()) {
-        addDebugLog('❌ Please enter a user ID to call');
-        return;
-      }
-      
-      addDebugLog(`📞 Starting call to ${userId}`);
-      setTargetUserId(userId);
-      setCallStatus('calling');
-      
-      const stream = await initializeMediaDevices();
-      const pc = createPeerConnection();
-      
-      stream.getTracks().forEach(track => {
-        pc.addTrack(track, stream);
-        addDebugLog(`➕ Added ${track.kind} track`);
-      });
-      
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      addDebugLog('📝 Created and set local offer');
-      
-      if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-        websocketRef.current.send(JSON.stringify({
-          type: 'call-offer',
-          offer: offer,
-          targetUserId: userId
-        }));
-        addDebugLog(`📤 Sent call offer to ${userId}`);
-      } else {
-        throw new Error('WebSocket not connected');
-      }
-      
-      peerConnectionRef.current = pc;
-      setIsCallActive(true);
-      
-    } catch (error) {
-      addDebugLog(`❌ Error starting call: ${error.message}`);
-      setCallStatus('error');
-      setTimeout(() => setCallStatus('connected'), 3000);
-    }
-  };
-
   const acceptCall = async () => {
     try {
-      addDebugLog(`✅ Accepting call from ${incomingCallFrom}`);
+      addDebugLog(`✅ Accepting call from ${incomingCallFrom?.username}`);
       setIsIncomingCall(false);
       setIsCallActive(true);
       setCallStatus('connecting');
-      setTargetUserId(incomingCallFrom);
+      setTargetUserId(incomingCallFrom?.userId);
       
       const stream = await initializeMediaDevices();
       const pc = createPeerConnection();
       
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
-        addDebugLog(`➕ Added ${track.kind} track`);
       });
       
       await pc.setRemoteDescription(new RTCSessionDescription(incomingOfferRef.current));
-      addDebugLog('📝 Set remote offer description');
       
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      addDebugLog('📝 Created and set local answer');
       
       if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
         websocketRef.current.send(JSON.stringify({
           type: 'call-answer',
           answer: answer,
-          targetUserId: incomingCallFrom
+          targetUserId: incomingCallFrom?.userId
         }));
-        addDebugLog(`📤 Sent call answer to ${incomingCallFrom}`);
       }
       
       peerConnectionRef.current = pc;
@@ -268,7 +396,6 @@ const VideoCall = () => {
     try {
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(message.answer));
-        addDebugLog('📝 Set remote answer description');
         setCallStatus('active');
       }
     } catch (error) {
@@ -280,7 +407,6 @@ const VideoCall = () => {
     try {
       if (peerConnectionRef.current && message.candidate) {
         await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(message.candidate));
-        addDebugLog('🧊 Added ICE candidate');
       }
     } catch (error) {
       addDebugLog(`❌ Error handling ICE candidate: ${error.message}`);
@@ -288,18 +414,18 @@ const VideoCall = () => {
   };
 
   const rejectCall = () => {
-    addDebugLog(`❌ Rejecting call from ${incomingCallFrom}`);
+    addDebugLog(`❌ Rejecting call from ${incomingCallFrom?.username}`);
     setIsIncomingCall(false);
     setCallStatus('connected');
     
     if (websocketRef.current) {
       websocketRef.current.send(JSON.stringify({
         type: 'call-end',
-        targetUserId: incomingCallFrom
+        targetUserId: incomingCallFrom?.userId
       }));
     }
     
-    setIncomingCallFrom('');
+    setIncomingCallFrom(null);
   };
 
   const endCall = () => {
@@ -307,10 +433,10 @@ const VideoCall = () => {
     setIsCallActive(false);
     setCallStatus('connected');
     
-    if (websocketRef.current && (targetUserId || incomingCallFrom)) {
+    if (websocketRef.current && (targetUserId || incomingCallFrom?.userId)) {
       websocketRef.current.send(JSON.stringify({
         type: 'call-end',
-        targetUserId: targetUserId || incomingCallFrom
+        targetUserId: targetUserId || incomingCallFrom?.userId
       }));
     }
     
@@ -333,7 +459,7 @@ const VideoCall = () => {
     }
     
     setTargetUserId('');
-    setIncomingCallFrom('');
+    setIncomingCallFrom(null);
   };
 
   const handleCallEnd = () => {
@@ -362,125 +488,196 @@ const VideoCall = () => {
     }
   };
 
-  // User setup screen
-  if (!isUserSet) {
+  // Authentication UI
+  if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
         <div className="bg-gray-800 p-8 rounded-lg max-w-md w-full">
           <div className="text-center mb-6">
             <Users size={48} className="mx-auto mb-4 text-blue-500" />
-            <h1 className="text-2xl font-bold mb-2">WebRTC Call App</h1>
-            <p className="text-gray-400">Enter your user ID to start</p>
+            <h1 className="text-2xl font-bold mb-2">Taurai Video Call</h1>
+            <p className="text-gray-400">
+              {showLogin ? 'Sign in to start calling' : 'Create your account'}
+            </p>
           </div>
           
-          <div className="space-y-4">
-            <input
-              type="text"
-              placeholder="Enter your user ID (e.g., alice, bob, charlie)"
-              value={currentUserId}
-              onChange={(e) => setCurrentUserId(e.target.value)}
-              className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
-              onKeyPress={(e) => e.key === 'Enter' && setUser()}
-            />
-            
-            <button
-              onClick={setUser}
-              disabled={!currentUserId.trim()}
-              className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold"
-            >
-              Connect
-            </button>
-            
-            <div className="text-sm text-gray-400">
-              <p className="mb-2">💡 <strong>Testing tip:</strong></p>
-              <p>Open multiple tabs with different user IDs:</p>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>Tab 1: alice</li>
-                <li>Tab 2: bob</li>
-                <li>Tab 3: charlie</li>
-              </ul>
+          {authError && (
+            <div className="bg-red-800 border border-red-600 rounded p-3 mb-4 text-sm">
+              {authError}
             </div>
+          )}
+          
+          {showLogin ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+              <input
+                type="text"
+                placeholder="Email"
+                value={loginData.username}
+                onChange={(e) => setLoginData({...loginData, email: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={loginData.password}
+                onChange={(e) => setLoginData({...loginData, password: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded-lg font-semibold"
+              >
+                {authLoading ? 'Signing in...' : 'Sign In'}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
+              <input
+                type="text"
+                placeholder="First Name"
+                value={registerData.fullName}
+                onChange={(e) => setRegisterData({...registerData, firstname: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+                            <input
+                type="text"
+                placeholder="Last Name"
+                value={registerData.fullName}
+                onChange={(e) => setRegisterData({...registerData, lastname: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <input
+                type="email"
+                placeholder="Email"
+                value={registerData.email}
+                onChange={(e) => setRegisterData({...registerData, email: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <input
+                type="password"
+                placeholder="Password"
+                value={registerData.password}
+                onChange={(e) => setRegisterData({...registerData, password: e.target.value})}
+                className="w-full px-4 py-3 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
+                required
+              />
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="w-full px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded-lg font-semibold"
+              >
+                {authLoading ? 'Creating Account...' : 'Create Account'}
+              </button>
+            </form>
+          )}
+          
+          <div className="mt-4 text-center">
+            <button
+              onClick={() => {
+                setShowLogin(!showLogin);
+                setAuthError('');
+              }}
+              className="text-blue-400 hover:text-blue-300 text-sm"
+            >
+              {showLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
+            </button>
           </div>
         </div>
       </div>
     );
   }
 
+  // Main authenticated UI
   return (
     <div className="min-h-screen bg-gray-900 text-white p-4">
       <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-bold">WebRTC Call App</h1>
+        {/* Header with user info */}
+        <div className="flex justify-between items-center mb-6 bg-gray-800 rounded-lg p-4">
+          <div>
+            <h1 className="text-2xl font-bold">Taurai Video Call</h1>
+            <p className="text-gray-400">Welcome, {currentUser?.fullName}</p>
+          </div>
           <div className="flex items-center gap-4">
-            <span className="text-blue-400 font-semibold">User: {currentUserId}</span>
+            <div className="flex items-center gap-2">
+              <User size={20} className="text-blue-400" />
+              <span className="text-sm">{currentUser?.username}</span>
+            </div>
             <div className={`w-3 h-3 rounded-full ${
               callStatus === 'connected' ? 'bg-green-500' : 
               callStatus === 'disconnected' ? 'bg-red-500' : 
               'bg-yellow-500'
             }`}></div>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-3 py-2 bg-red-600 hover:bg-red-700 rounded text-sm"
+            >
+              <LogOut size={16} />
+              Logout
+            </button>
           </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Call Interface */}
           <div className="lg:col-span-2 space-y-6">
-            {/* Call Initiation */}
+            {/* Online Users */}
             {!isCallActive && !isIncomingCall && callStatus === 'connected' && (
               <div className="bg-gray-800 rounded-lg p-6">
-                <h2 className="text-xl mb-4">Start a Call</h2>
-                <div className="flex gap-4">
-                  <input
-                    type="text"
-                    placeholder="Enter user ID to call"
-                    value={targetUserId}
-                    onChange={(e) => setTargetUserId(e.target.value)}
-                    className="flex-1 px-4 py-2 bg-gray-700 rounded-lg border border-gray-600 focus:outline-none focus:border-blue-500"
-                    onKeyPress={(e) => e.key === 'Enter' && startCall(targetUserId)}
-                  />
-                  <button
-                    onClick={() => startCall(targetUserId)}
-                    disabled={!targetUserId.trim()}
-                    className="px-6 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg flex items-center gap-2"
-                  >
-                    <Phone size={20} />
-                    Call
-                  </button>
-                </div>
-                
-                <div className="mt-4">
-                  <p className="text-sm text-gray-400 mb-2">Quick test users:</p>
-                  <div className="flex gap-2">
-                    {['alice', 'bob', 'charlie', 'david'].filter(user => user !== currentUserId).map(user => (
-                      <button
-                        key={user}
-                        onClick={() => setTargetUserId(user)}
-                        className="px-3 py-1 text-sm bg-gray-600 hover:bg-gray-500 rounded"
-                      >
-                        {user}
-                      </button>
+                <h2 className="text-xl mb-4 flex items-center gap-2">
+                  <Users size={24} />
+                  Online Users ({onlineUsers.length})
+                </h2>
+                {onlineUsers.length === 0 ? (
+                  <p className="text-gray-400 text-center py-8">
+                    No other users online. Invite friends to join!
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {onlineUsers.map(user => (
+                      <div key={user.userId} className="bg-gray-700 rounded-lg p-4 flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold">{user.fullName}</p>
+                          <p className="text-sm text-gray-400">@{user.username}</p>
+                        </div>
+                        <button
+                          onClick={() => startCall(user.userId)}
+                          className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg flex items-center gap-2"
+                        >
+                          <Phone size={16} />
+                          Call
+                        </button>
+                      </div>
                     ))}
                   </div>
-                </div>
+                )}
               </div>
             )}
             
             {/* Incoming Call */}
-            {isIncomingCall && (
+            {isIncomingCall && incomingCallFrom && (
               <div className="bg-blue-800 rounded-lg p-6 text-center animate-pulse">
-                <h2 className="text-xl mb-4">📞 Incoming Call</h2>
-                <p className="text-lg mb-6">From: <strong>{incomingCallFrom}</strong></p>
+                <h2 className="text-xl mb-2">📞 Incoming Call</h2>
+                <div className="mb-6">
+                  <p className="text-lg font-semibold">{incomingCallFrom.fullName}</p>
+                  <p className="text-blue-200">@{incomingCallFrom.username}</p>
+                </div>
                 <div className="flex gap-4 justify-center">
                   <button
                     onClick={acceptCall}
-                    className="px-6 py-3 bg-green-600 hover:bg-green-700 rounded-lg flex items-center gap-2 text-lg"
+                    className="px-8 py-4 bg-green-600 hover:bg-green-700 rounded-lg flex items-center gap-2 text-lg"
                   >
                     <Phone size={24} />
                     Accept
                   </button>
                   <button
                     onClick={rejectCall}
-                    className="px-6 py-3 bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2 text-lg"
+                    className="px-8 py-4 bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2 text-lg"
                   >
                     <PhoneOff size={24} />
                     Reject
@@ -494,7 +691,7 @@ const VideoCall = () => {
               <div className="text-center">
                 <div className="inline-flex items-center px-6 py-3 bg-yellow-800 rounded-full">
                   <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white mr-3"></div>
-                  {callStatus === 'calling' ? `Calling ${targetUserId}...` : 'Connecting...'}
+                  {callStatus === 'calling' ? 'Calling...' : 'Connecting...'}
                 </div>
               </div>
             )}
@@ -502,9 +699,7 @@ const VideoCall = () => {
             {/* Video Call Interface */}
             {isCallActive && (
               <div className="space-y-4">
-                {/* Video Containers */}
                 <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
-                  {/* Remote Video */}
                   <video
                     ref={remoteVideoRef}
                     autoPlay
@@ -512,7 +707,6 @@ const VideoCall = () => {
                     className="w-full h-full object-cover"
                   />
                   
-                  {/* Local Video (Picture-in-Picture) */}
                   <div className="absolute top-4 right-4 w-32 h-24 bg-gray-800 rounded-lg overflow-hidden border-2 border-gray-600">
                     <video
                       ref={localVideoRef}
@@ -523,18 +717,13 @@ const VideoCall = () => {
                     />
                   </div>
                   
-                  {/* Call Info Overlay */}
                   <div className="absolute top-4 left-4 bg-black bg-opacity-50 px-3 py-2 rounded">
                     <p className="text-sm">
                       {callStatus === 'active' ? '🟢 Connected' : '🟡 Connecting...'}
                     </p>
-                    <p className="text-xs text-gray-300">
-                      With: {targetUserId || incomingCallFrom}
-                    </p>
                   </div>
                 </div>
                 
-                {/* Call Controls */}
                 <div className="flex justify-center gap-4">
                   <button
                     onClick={toggleAudio}
@@ -576,28 +765,19 @@ const VideoCall = () => {
             
             {callStatus === 'disconnected' && (
               <div className="bg-yellow-800 border border-yellow-600 rounded-lg p-4 text-center">
-                <p className="text-yellow-200">🔌 Disconnected from server. Attempting to reconnect...</p>
-                <button 
-                  onClick={initializeWebSocket}
-                  className="mt-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded"
-                >
-                  Reconnect
-                </button>
+                <p className="text-yellow-200">🔌 Disconnected from server. Reconnecting...</p>
               </div>
             )}
           </div>
           
           {/* Debug Panel */}
           <div className="space-y-4">
-            {/* Status Panel */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                📊 Status
-              </h3>
+              <h3 className="text-lg font-semibold mb-3">📊 Status</h3>
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-gray-400">User ID:</span>
-                  <span className="font-mono">{currentUserId}</span>
+                  <span className="text-gray-400">User:</span>
+                  <span>{currentUser?.username}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Connection:</span>
@@ -610,29 +790,14 @@ const VideoCall = () => {
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-400">Target User:</span>
-                  <span className="font-mono">{targetUserId || incomingCallFrom || 'None'}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Audio:</span>
-                  <span className={isAudioMuted ? 'text-red-400' : 'text-green-400'}>
-                    {isAudioMuted ? '🔇 Muted' : '🔊 Active'}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Video:</span>
-                  <span className={isVideoMuted ? 'text-red-400' : 'text-green-400'}>
-                    {isVideoMuted ? '📹 Off' : '📷 On'}
-                  </span>
+                  <span className="text-gray-400">Online Users:</span>
+                  <span>{onlineUsers.length}</span>
                 </div>
               </div>
             </div>
             
-            {/* Debug Logs */}
             <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                🐛 Debug Logs
-              </h3>
+              <h3 className="text-lg font-semibold mb-3">🐛 Debug Logs</h3>
               <div className="bg-black rounded p-3 text-xs font-mono max-h-64 overflow-y-auto">
                 {debugLogs.length === 0 ? (
                   <div className="text-gray-500 italic">No logs yet...</div>
@@ -648,35 +813,8 @@ const VideoCall = () => {
                 onClick={() => setDebugLogs([])}
                 className="mt-2 px-3 py-1 text-xs bg-gray-600 hover:bg-gray-700 rounded"
               >
-                Clear Logs
+                Clear
               </button>
-            </div>
-            
-            {/* Instructions */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                📋 Instructions
-              </h3>
-              <div className="text-sm space-y-2 text-gray-300">
-                <p><strong>To test locally:</strong></p>
-                <ol className="list-decimal list-inside space-y-1 ml-2">
-                  <li>Start your Spring Boot server</li>
-                  <li>Open multiple browser tabs</li>
-                  <li>Use different user IDs (alice, bob, etc.)</li>
-                  <li>Make calls between the tabs</li>
-                </ol>
-                
-                <p className="mt-3"><strong>URLs for testing:</strong></p>
-                <div className="bg-black rounded p-2 text-xs font-mono">
-                  <div>?userId=alice</div>
-                  <div>?userId=bob</div>
-                  <div>?userId=charlie</div>
-                </div>
-                
-                <p className="mt-3 text-xs text-gray-400">
-                  💡 Grant camera/microphone permissions when prompted
-                </p>
-              </div>
             </div>
           </div>
         </div>
@@ -685,4 +823,4 @@ const VideoCall = () => {
   );
 };
 
-export default VideoCall;
+export default VideoCallApp
