@@ -362,7 +362,8 @@ const VideoCallApp = () => {
       setIsIncomingCall(false);
       setIsCallActive(true);
       setCallStatus('connecting');
-      setTargetUserId(incomingCallFrom?.userId);
+      const callerId = incomingCallFrom?.userId;
+      setTargetUserId(callerId);
       
       const stream = await initializeMediaDevices();
       const pc = createPeerConnection();
