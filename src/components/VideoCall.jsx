@@ -276,33 +276,50 @@ const VideoCallApp = () => {
 
   const startCall = async (userId) => {
     try {
+      console.log("=== START CALL DEBUG ===");
+      console.log("userId parameter:", userId);
+      console.log("Current targetUserId state:", targetUserId);
+      console.log("Current incomingCallFrom:", incomingCallFrom);
+      
       addDebugLog(`📞 Starting call to ${userId}`);
       setTargetUserId(userId);
       setCallStatus('calling');
       
+      // Wait a moment for state to update (though this shouldn't be necessary)
+      console.log("About to call initializeMediaDevices...");
       const stream = await initializeMediaDevices();
-      const pc = createPeerConnection();
+      
+      console.log("About to create peer connection with userId:", userId);
+      const pc = createPeerConnection(userId); // Pass userId as parameter
       
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
+        console.log(`Added ${track.kind} track to peer connection`);
       });
       
+      console.log("Creating offer...");
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
+      console.log("Offer created and set as local description");
       
       if (websocketRef.current && websocketRef.current.readyState === WebSocket.OPEN) {
-      console.log("Calling user with ID",userId)
+        console.log("Sending call offer via WebSocket to:", userId);
         websocketRef.current.send(JSON.stringify({
           type: 'call-offer',
           offer: offer,
           targetUserId: userId
         }));
+        addDebugLog(`📤 Sent call offer to ${userId}`);
+      } else {
+        console.error("WebSocket not ready:", websocketRef.current?.readyState);
       }
       
       peerConnectionRef.current = pc;
       setIsCallActive(true);
+      console.log("=== START CALL COMPLETE ===");
       
     } catch (error) {
+      console.error("Error in startCall:", error);
       addDebugLog(`❌ Error starting call: ${error.message}`);
       setCallStatus('error');
       setTimeout(() => setCallStatus('connected'), 3000);
@@ -323,15 +340,28 @@ const VideoCallApp = () => {
     return stream;
   };
 
-  const createPeerConnection = () => {
+  const createPeerConnection = (targetUser) => {
     const pc = new RTCPeerConnection(rtcConfiguration);
+    
+    console.log("Creating peer connection with target:", targetUser);
+    console.log("State targetUserId:", targetUserId);
+    console.log("State incomingCallFrom:", incomingCallFrom?.userId);
     
     pc.onicecandidate = (event) => {
       if (event.candidate && websocketRef.current) {
+        console.log("ICE candidate - using targetUser:", targetUser);
+        addDebugLog(`🧊 Sending ICE candidate to ${targetUser}`);
+        
+        if (!targetUser) {
+          addDebugLog('❌ ERROR: No target user ID for ICE candidate!');
+          console.error('No target user ID available for ICE candidate');
+          return;
+        }
+        
         websocketRef.current.send(JSON.stringify({
           type: 'ice-candidate',
           candidate: event.candidate,
-          targetUserId: targetUserId || incomingCallFrom?.userId
+          targetUserId: targetUser
         }));
       }
     };
@@ -358,15 +388,23 @@ const VideoCallApp = () => {
 
   const acceptCall = async () => {
     try {
-      addDebugLog(`✅ Accepting call from ${incomingCallFrom?.username}`);
+      const callerId = incomingCallFrom?.userId;
+      addDebugLog(`✅ Accepting call from ${incomingCallFrom?.username} (ID: ${callerId})`);
+      
+      if (!callerId) {
+        addDebugLog('❌ ERROR: No caller ID available!');
+        return;
+      }
+      
       setIsIncomingCall(false);
       setIsCallActive(true);
       setCallStatus('connecting');
-      const callerId = incomingCallFrom?.userId;
+      
+      // Set the target user ID to the incoming caller
       setTargetUserId(callerId);
       
       const stream = await initializeMediaDevices();
-      const pc = createPeerConnection();
+      const pc = createPeerConnection(callerId); // Pass callerId as parameter
       
       stream.getTracks().forEach(track => {
         pc.addTrack(track, stream);
@@ -381,8 +419,9 @@ const VideoCallApp = () => {
         websocketRef.current.send(JSON.stringify({
           type: 'call-answer',
           answer: answer,
-          targetUserId: incomingCallFrom?.userId
+          targetUserId: callerId
         }));
+        addDebugLog(`📤 Sent call answer to ${callerId}`);
       }
       
       peerConnectionRef.current = pc;
