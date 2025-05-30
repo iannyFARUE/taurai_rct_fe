@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Users, LogOut, User } from 'lucide-react';
+import API_CONFIG from '../config/api';
 
 const VideoCallApp = () => {
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
-const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8080/call-signaling';
+  const API_BASE_URL = API_CONFIG.BASE_URL;
+const WS_URL = API_CONFIG.WS_URL;
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState(null);
