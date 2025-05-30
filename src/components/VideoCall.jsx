@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Video, VideoOff, Users, LogOut, User } from 'lucide-react';
 
 const VideoCallApp = () => {
+  const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080';
+const WS_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8080/call-signaling';
   // Authentication state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authToken, setAuthToken] = useState(null);
@@ -72,7 +74,7 @@ const VideoCallApp = () => {
 
   const validateToken = async (token, userData) => {
     try {
-      const response = await fetch('http://localhost:8080/api/v1/auth/validate-token', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/validate-token`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -104,7 +106,7 @@ const VideoCallApp = () => {
     setAuthError('');
     
     try {
-      const response = await fetch('http://localhost:8080/api/v1/auth/authenticate', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/authenticate`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -140,7 +142,7 @@ const VideoCallApp = () => {
     setAuthError('');
     
     try {
-      const response = await fetch('http://localhost:8080/api/v1/auth/register', {
+      const response = await fetch(`${API_BASE_URL}/api/v1/auth/register`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -199,7 +201,7 @@ const VideoCallApp = () => {
   };
 
   const initializeWebSocket = () => {
-    const ws = new WebSocket(`ws://localhost:8080/call-signaling?token=${authToken}`);
+    const ws = new WebSocket(`${WS_URL}?token=${authToken}`);
     
     ws.onopen = () => {
       addDebugLog('✅ WebSocket connected to server');
